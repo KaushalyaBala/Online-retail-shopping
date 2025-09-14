@@ -1,0 +1,429 @@
+package com.retail.user;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+@SpringBootApplication
+public class UserServiceApplication {
+    public static void main(String[] args) {
+        SpringApplication.run(UserServiceApplication.class, args);
+    }
+}
+
+
+
+spring.datasource.url=jdbc:mysql://localhost:3306/online_retail
+spring.datasource.username=root
+spring.datasource.password=password
+spring.jpa.hibernate.ddl-auto=update
+spring.jpa.show-sql=true
+server.port=8081
+
+spring.application.name=user-service
+
+# JWT Config
+jwt.secret=MyJwtSecretKey
+
+# Eureka Client
+eureka.client.service-url.defaultZone=http://localhost:8761/eureka/
+eureka.client.register-with-eureka=true
+eureka.client.fetch-registry=true
+
+
+
+
+
+package com.retail.user.model;
+
+import jakarta.persistence.*;
+import jakarta.validation.constraints.Email;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
+
+@Entity
+@Table(name = "users")
+public class User {
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @NotBlank(message = "Name is required")
+    private String name;
+
+    @NotBlank(message = "Email is required")
+    @Email(message = "Invalid email format")
+    @Column(unique = true)
+    private String email;
+
+    @NotBlank(message = "Password is required")
+    @Size(min = 6, message = "Password must be at least 6 characters")
+    private String password;
+
+    @NotBlank(message = "Role is required")
+    private String role; // CUSTOMER or ADMIN
+
+    @NotBlank(message = "Address is required")
+    private String address;
+
+    private String phone;
+
+    // Getters and Setters
+    // ... (omitted for brevity)
+}
+
+
+
+
+
+package com.retail.user.dto;
+
+import jakarta.validation.constraints.Email;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
+
+public class UserDto {
+    @NotBlank(message = "Name is required")
+    private String name;
+
+    @NotBlank(message = "Email is required")
+    @Email(message = "Invalid email format")
+    private String email;
+
+    @NotBlank(message = "Password is required")
+    @Size(min = 6, message = "Password must be at least 6 characters")
+    private String password;
+
+    @NotBlank(message = "Role is required")
+    private String role;
+
+    @NotBlank(message = "Address is required")
+    private String address;
+
+    private String phone;
+
+    // Getters and Setters
+}
+
+
+
+
+package com.retail.user.dto;
+
+import jakarta.validation.constraints.Email;
+import jakarta.validation.constraints.NotBlank;
+
+public class LoginRequest {
+    @NotBlank
+    @Email
+    private String email;
+
+    @NotBlank
+    private String password;
+
+    // Getters and Setters
+}
+
+
+
+
+package com.retail.user.dto;
+
+public class LoginResponse {
+    private String token;
+
+    public LoginResponse(String token) {
+        this.token = token;
+    }
+
+    public String getToken() {
+        return token;
+    }
+}
+
+
+
+
+
+
+
+package com.retail.user.repository;
+
+import com.retail.user.model.User;
+import org.springframework.data.jpa.repository.JpaRepository;
+import java.util.Optional;
+
+public interface UserRepository extends JpaRepository<User, Long> {
+    Optional<User> findByEmail(String email);
+}
+
+
+
+
+
+
+package com.retail.user.service;
+
+import com.retail.user.model.User;
+import com.retail.user.repository.UserRepository;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.stereotype.Service;
+
+import java.util.Optional;
+
+@Service
+public class UserService {
+
+    @Autowired
+    private UserRepository userRepository;
+
+    @Autowired
+    private PasswordEncoder passwordEncoder;
+
+    public User registerUser(User user) {
+        user.setPassword(passwordEncoder.encode(user.getPassword()));
+        return userRepository.save(user);
+    }
+
+    public Optional<User> findByEmail(String email) {
+        return userRepository.findByEmail(email);
+    }
+
+    public User updateProfile(User user) {
+        return userRepository.save(user);
+    }
+
+    public Optional<User> findById(Long id) {
+        return userRepository.findById(id);
+    }
+}
+
+
+
+
+
+
+
+
+
+package com.retail.user.service;
+
+import com.retail.user.model.User;
+import com.retail.user.repository.UserRepository;
+import com.retail.user.config.JwtUtil;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.stereotype.Service;
+
+@Service
+public class AuthService {
+
+    @Autowired
+    private AuthenticationManager authenticationManager;
+
+    @Autowired
+    private JwtUtil jwtUtil;
+
+    @Autowired
+    private UserService userService;
+
+    public String login(String email, String password) {
+        Authentication auth = authenticationManager.authenticate(
+                new UsernamePasswordAuthenticationToken(email, password)
+        );
+        User user = userService.findByEmail(email).orElseThrow();
+        return jwtUtil.generateToken(user);
+    }
+}
+
+
+
+
+
+
+
+
+
+package com.retail.user.config;
+
+import com.retail.user.service.UserService;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.config.annotation.authentication.builders.AuthenticationManagerBuilder;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.web.SecurityFilterChain;
+
+@Configuration
+public class SecurityConfig {
+
+    @Autowired
+    private UserService userService;
+
+    @Bean
+    public PasswordEncoder passwordEncoder() {
+        return new BCryptPasswordEncoder();
+    }
+
+    @Bean
+    public AuthenticationManager authManager(HttpSecurity http) throws Exception {
+        return http.getSharedObject(AuthenticationManagerBuilder.class)
+                .userDetailsService(username -> userService.findByEmail(username).orElseThrow())
+                .passwordEncoder(passwordEncoder())
+                .and()
+                .build();
+    }
+
+    @Bean
+    public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+        http.csrf().disable()
+            .authorizeHttpRequests()
+            .requestMatchers("/api/auth/**").permitAll()
+            .anyRequest().authenticated();
+        return http.build();
+    }
+}
+
+
+
+
+
+
+
+package com.retail.user.config;
+
+import com.retail.user.model.User;
+import io.jsonwebtoken.Jwts;
+import io.jsonwebtoken.SignatureAlgorithm;
+import org.springframework.stereotype.Component;
+
+@Component
+public class JwtUtil {
+
+    private final String secret = "MyJwtSecretKey";
+
+    public String generateToken(User user) {
+        return Jwts.builder()
+                .setSubject(user.getEmail())
+                .claim("role", user.getRole())
+                .signWith(SignatureAlgorithm.HS256, secret)
+                .compact();
+    }
+}
+
+
+
+
+
+
+
+package com.retail.user.controller;
+
+import com.retail.user.dto.LoginRequest;
+import com.retail.user.dto.LoginResponse;
+import com.retail.user.dto.UserDto;
+import com.retail.user.model.User;
+import com.retail.user.service.AuthService;
+import com.retail.user.service.UserService;
+import jakarta.validation.Valid;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+
+@RestController
+@RequestMapping("/api/auth")
+public class AuthController {
+
+    @Autowired
+    private UserService userService;
+
+    @Autowired
+    private AuthService authService;
+
+    @PostMapping("/register")
+    public ResponseEntity<?> register(@Valid @RequestBody UserDto userDto) {
+        User user = new User();
+        user.setName(userDto.getName());
+        user.setEmail(userDto.getEmail());
+        user.setPassword(userDto.getPassword());
+        user.setRole(userDto.getRole());
+        user.setAddress(userDto.getAddress());
+        user.setPhone(userDto.getPhone());
+        userService.registerUser(user);
+        return ResponseEntity.ok("User registered successfully");
+    }
+
+    @PostMapping("/login")
+    public ResponseEntity<?> login(@Valid @RequestBody LoginRequest request) {
+        String token = authService.login(request.getEmail(), request.getPassword());
+        return ResponseEntity.ok(new LoginResponse(token));
+    }
+}
+
+
+
+
+
+
+
+package com.retail.user.controller;
+
+import com.retail.user.model.User;
+import com.retail.user.service.UserService;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
+import org.springframework.web.bind.annotation.*;
+
+import jakarta.validation.Valid;
+import java.util.Optional;
+
+@RestController
+@RequestMapping("/api/users")
+public class UserController {
+
+    @Autowired
+    private UserService userService;
+
+    @GetMapping("/profile")
+    public ResponseEntity<?> getProfile(Authentication auth) {
+        String email = auth.getName();
+        Optional<User> user = userService.findByEmail(email);
+        return user.map(ResponseEntity::ok).orElse(ResponseEntity.notFound().build());
+    }
+
+    @PutMapping("/profile")
+    public ResponseEntity<?> updateProfile(Authentication auth, @Valid @RequestBody User updatedUser) {
+        String email = auth.getName();
+        Optional<User> existingUser = userService.findByEmail(email);
+        if (existingUser.isEmpty()) return ResponseEntity.notFound().build();
+
+        User user = existingUser.get();
+        user.setName(updatedUser.getName());
+        user.setAddress(updatedUser.getAddress());
+        user.setPhone(updatedUser.getPhone());
+        if (!updatedUser.getPassword().isEmpty()) {
+            user.setPassword(updatedUser.getPassword());
+        }
+        userService.updateProfile(user);
+        return ResponseEntity.ok("Profile updated successfully");
+    }
+
+    // Admin can view any customer profile
+    @GetMapping("/{id}")
+    public ResponseEntity<?> getUserById(@PathVariable Long id, Authentication auth) {
+        // Check if current user is admin
+        Optional<User> currentUser = userService.findByEmail(auth.getName());
+        if (currentUser.isEmpty()) return ResponseEntity.status(403).build();
+        if (!currentUser.get().getRole().equalsIgnoreCase("ADMIN")) return ResponseEntity.status(403).build();
+
+        Optional<User> user = userService.findById(id);
+        return user.map(ResponseEntity::ok).orElse(ResponseEntity.notFound().build());
+    }
+}
