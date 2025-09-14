@@ -1,0 +1,424 @@
+<project>
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.example</groupId>
+  <artifactId>user-service</artifactId>
+  <version>0.0.1-SNAPSHOT</version>
+  <packaging>jar</packaging>
+
+  <parent>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-parent</artifactId>
+    <version>3.1.4</version>
+    <relativePath/>
+  </parent>
+
+  <dependencies>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-web</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-data-jpa</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-security</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.jsonwebtoken</groupId>
+      <artifactId>jjwt-api</artifactId>
+      <version>0.11.5</version>
+    </dependency>
+    <dependency>
+      <groupId>io.jsonwebtoken</groupId>
+      <artifactId>jjwt-impl</artifactId>
+      <version>0.11.5</version>
+      <scope>runtime</scope>
+    </dependency>
+    <dependency>
+      <groupId>io.jsonwebtoken</groupId>
+      <artifactId>jjwt-jackson</artifactId>
+      <version>0.11.5</version>
+      <scope>runtime</scope>
+    </dependency>
+    <dependency>
+      <groupId>com.h2database</groupId>
+      <artifactId>h2</artifactId>
+      <scope>runtime</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.cloud</groupId>
+      <artifactId>spring-cloud-starter-netflix-eureka-client</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <properties>
+    <java.version>17</java.version>
+  </properties>
+</project>
+
+
+
+
+
+package com.example.userservice;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.cloud.netflix.eureka.EnableEurekaClient;
+
+@SpringBootApplication
+@EnableEurekaClient
+public class UserServiceApplication {
+  public static void main(String[] args) {
+    SpringApplication.run(UserServiceApplication.class, args);
+  }
+}
+
+
+
+
+
+
+
+
+
+
+
+server:
+  port: 8081
+
+spring:
+  datasource:
+    url: jdbc:h2:mem:userdb;DB_CLOSE_DELAY=-1
+    driverClassName: org.h2.Driver
+    username: sa
+    password:
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+
+eureka:
+  client:
+    register-with-eureka: true
+    fetch-registry: true
+    service-url:
+      defaultZone: http://localhost:8761/eureka/
+
+jwt:
+  secret: verysecret_please_change_in_prod
+  expirationMs: 86400000
+
+
+
+
+
+package com.example.userservice.model;
+
+import jakarta.persistence.*;
+
+@Entity
+@Table(name = "users")
+public class User {
+  @Id
+  @GeneratedValue(strategy = GenerationType.IDENTITY)
+  private Long id;
+
+  @Column(unique = true, nullable = false)
+  private String email;
+
+  @Column(nullable = false)
+  private String password;
+
+  @Column(nullable = false)
+  private String role; // e.g. ROLE_USER or ROLE_ADMIN
+
+  // getters & setters
+}
+
+
+
+
+
+package com.example.userservice.repository;
+
+import com.example.userservice.model.User;
+import org.springframework.data.jpa.repository.JpaRepository;
+import java.util.Optional;
+
+public interface UserRepository extends JpaRepository<User, Long> {
+  Optional<User> findByEmail(String email);
+}
+
+
+
+
+
+package com.example.userservice.dto;
+
+public class RegisterRequest {
+  public String email;
+  public String password;
+  public String role; // optional, default ROLE_USER
+}
+
+public class LoginRequest {
+  public String email;
+  public String password;
+}
+
+public class AuthResponse {
+  public String token;
+  public String tokenType = "Bearer";
+  public String email;
+}
+
+
+
+
+
+
+
+
+package com.example.userservice.security;
+
+import io.jsonwebtoken.*;
+import io.jsonwebtoken.security.Keys;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Component;
+
+import java.security.Key;
+import java.util.Date;
+
+@Component
+public class JwtUtil {
+  @Value("${jwt.secret}")
+  private String jwtSecret;
+
+  @Value("${jwt.expirationMs}")
+  private long jwtExpirationMs;
+
+  private Key getSigningKey() {
+    return Keys.hmacShaKeyFor(jwtSecret.getBytes());
+  }
+
+  public String generateToken(String subject, String role) {
+    Date now = new Date();
+    Date expiry = new Date(now.getTime() + jwtExpirationMs);
+    return Jwts.builder()
+        .setSubject(subject)
+        .claim("role", role)
+        .setIssuedAt(now)
+        .setExpiration(expiry)
+        .signWith(getSigningKey(), SignatureAlgorithm.HS256)
+        .compact();
+  }
+
+  public boolean validateToken(String token) {
+    try {
+      Jwts.parserBuilder().setSigningKey(getSigningKey()).build().parseClaimsJws(token);
+      return true;
+    } catch (JwtException ex) {
+      return false;
+    }
+  }
+
+  public String getEmailFromToken(String token) {
+    return Jwts.parserBuilder()
+        .setSigningKey(getSigningKey())
+        .build()
+        .parseClaimsJws(token)
+        .getBody()
+        .getSubject();
+  }
+}
+
+
+
+
+package com.example.userservice.security;
+
+import com.example.userservice.model.User;
+import com.example.userservice.repository.UserRepository;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.userdetails.*;
+import org.springframework.stereotype.Service;
+
+import java.util.Collections;
+
+@Service
+public class UserDetailsServiceImpl implements UserDetailsService {
+  private final UserRepository repo;
+  public UserDetailsServiceImpl(UserRepository repo) { this.repo = repo; }
+
+  @Override
+  public UserDetails loadUserByUsername(String email) throws UsernameNotFoundException {
+    User user = repo.findByEmail(email)
+        .orElseThrow(() -> new UsernameNotFoundException("User not found: " + email));
+    return new org.springframework.security.core.userdetails.User(
+        user.getEmail(),
+        user.getPassword(),
+        Collections.singletonList(new SimpleGrantedAuthority(user.getRole()))
+    );
+  }
+}
+
+
+
+
+
+package com.example.userservice.security;
+
+import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.http.*;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.stereotype.Component;
+import org.springframework.web.filter.OncePerRequestFilter;
+
+import java.io.IOException;
+import java.util.List;
+
+@Component
+public class JwtAuthFilter extends OncePerRequestFilter {
+  private final JwtUtil jwtUtil;
+
+  public JwtAuthFilter(JwtUtil jwtUtil) { this.jwtUtil = jwtUtil; }
+
+  @Override
+  protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
+      throws ServletException, IOException {
+    final String authHeader = request.getHeader("Authorization");
+    if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+      chain.doFilter(request, response);
+      return;
+    }
+    final String token = authHeader.substring(7);
+    if (!jwtUtil.validateToken(token)) {
+      chain.doFilter(request, response);
+      return;
+    }
+    String email = jwtUtil.getEmailFromToken(token);
+    String role = Jwts.parserBuilder().setSigningKey(jwtUtil.getSigningKey()).build()
+                  .parseClaimsJws(token).getBody().get("role", String.class);
+
+    UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken(
+        email, null, List.of(new SimpleGrantedAuthority(role))
+    );
+    SecurityContextHolder.getContext().setAuthentication(auth);
+    chain.doFilter(request, response);
+  }
+}
+
+
+
+
+package com.example.userservice.security;
+
+import org.springframework.context.annotation.*;
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
+import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.crypto.bcrypt.*;
+import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+
+@Configuration
+public class SecurityConfig {
+  private final JwtAuthFilter jwtAuthFilter;
+  private final UserDetailsServiceImpl userDetailsService;
+
+  public SecurityConfig(JwtAuthFilter jwtAuthFilter, UserDetailsServiceImpl userDetailsService) {
+    this.jwtAuthFilter = jwtAuthFilter;
+    this.userDetailsService = userDetailsService;
+  }
+
+  @Bean
+  public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+    http.csrf().disable()
+      .authorizeHttpRequests(auth -> auth
+        .requestMatchers("/api/auth/**").permitAll()
+        .anyRequest().authenticated()
+      )
+      .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+      ;
+    http.addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class);
+    return http.build();
+  }
+
+  @Bean
+  public PasswordEncoder passwordEncoder() {
+    return new BCryptPasswordEncoder();
+  }
+
+  @Bean
+  public AuthenticationManager authenticationManager(AuthenticationConfiguration config) throws Exception {
+    return config.getAuthenticationManager();
+  }
+}
+
+
+
+
+
+
+package com.example.userservice.controller;
+
+import com.example.userservice.dto.*;
+import com.example.userservice.model.User;
+import com.example.userservice.repository.UserRepository;
+import com.example.userservice.security.JwtUtil;
+import org.springframework.http.*;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.web.bind.annotation.*;
+
+@RestController
+@RequestMapping("/api/auth")
+public class AuthController {
+  private final UserRepository userRepo;
+  private final PasswordEncoder passwordEncoder;
+  private final JwtUtil jwtUtil;
+
+  public AuthController(UserRepository userRepo, PasswordEncoder passwordEncoder, JwtUtil jwtUtil) {
+    this.userRepo = userRepo;
+    this.passwordEncoder = passwordEncoder;
+    this.jwtUtil = jwtUtil;
+  }
+
+  @PostMapping("/register")
+  public ResponseEntity<?> register(@RequestBody RegisterRequest req) {
+    if (userRepo.findByEmail(req.email).isPresent()) {
+      return ResponseEntity.status(HttpStatus.CONFLICT).body("Email already taken");
+    }
+    User u = new User();
+    u.setEmail(req.email);
+    u.setPassword(passwordEncoder.encode(req.password));
+    u.setRole(req.role == null ? "ROLE_USER" : req.role);
+    userRepo.save(u);
+    return ResponseEntity.ok("Registered");
+  }
+
+  @PostMapping("/login")
+  public ResponseEntity<?> login(@RequestBody LoginRequest req) {
+    return userRepo.findByEmail(req.email)
+      .map(user -> {
+        if (!passwordEncoder.matches(req.password, user.getPassword())) {
+          return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Invalid credentials");
+        }
+        String token = jwtUtil.generateToken(user.getEmail(), user.getRole());
+        AuthResponse ar = new AuthResponse();
+        ar.token = token; ar.email = user.getEmail();
+        return ResponseEntity.ok(ar);
+      }).orElse(ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Invalid credentials"));
+  }
+}
