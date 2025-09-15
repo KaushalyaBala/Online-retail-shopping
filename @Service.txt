@@ -1,57 +1,43 @@
-@Service
-public class CustomUserDetailsService implements UserDetailsService {
-
-    private final UserRepository userRepository;
-
-    public CustomUserDetailsService(UserRepository userRepository) {
-        this.userRepository = userRepository;
-    }
-
-    @Override
-    public UserDetails loadUserByUsername(String email) throws UsernameNotFoundException {
-        com.retail.user.model.User u = userRepository.findByEmail(email)
-                .orElseThrow(() -> new UsernameNotFoundException("User not found: " + email));
-
-        List<SimpleGrantedAuthority> authorities = List.of(
-            new SimpleGrantedAuthority("ROLE_" + u.getRole().toUpperCase())
-        );
-
-        return new org.springframework.security.core.userdetails.User(
-                u.getEmail(),
-                u.getPassword(),   // must already be encoded in DB
-                authorities
-        );
-    }
-}
-
-
 @Configuration
 @EnableWebSecurity
 public class SecurityConfig {
 
     @Autowired
-    private CustomUserDetailsService customUserDetailsService;
+    private CustomerUserDetailsService customerUserDetailsService;
 
-    @Bean
-    public AuthenticationManager authenticationManager(AuthenticationConfiguration config) throws Exception {
-        return config.getAuthenticationManager();
-    }
-
+    // 1. Define PasswordEncoder bean
     @Bean
     public PasswordEncoder passwordEncoder() {
         return new BCryptPasswordEncoder();
     }
 
+    // 2. AuthenticationManager with UserDetailsService + Encoder
+    @Bean
+    public AuthenticationManager authenticationManager(
+            AuthenticationConfiguration config) throws Exception {
+        return config.getAuthenticationManager();
+    }
+
+    // 3. Security Filter Chain
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
         http
             .csrf().disable()
             .authorizeHttpRequests()
-            .requestMatchers("/api/auth/**").permitAll()  // registration, login
+            .requestMatchers("/api/auth/**").permitAll() // allow login & register
             .anyRequest().authenticated()
             .and()
-            .userDetailsService(customUserDetailsService);
+            .httpBasic(); // or JWT filter here
 
         return http.build();
+    }
+
+    // 4. Authentication provider explicitly (optional but good practice)
+    @Bean
+    public DaoAuthenticationProvider authProvider() {
+        DaoAuthenticationProvider authProvider = new DaoAuthenticationProvider();
+        authProvider.setUserDetailsService(customerUserDetailsService);
+        authProvider.setPasswordEncoder(passwordEncoder());
+        return authProvider;
     }
 }
